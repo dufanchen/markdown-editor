@@ -80,7 +80,7 @@ function App() {
     themeClickTimes.current = themeClickTimes.current.filter((t) => now - t < 8000);
     if (themeClickTimes.current.length >= 20) {
       themeClickTimes.current = [];
-授权完成。      import("@tauri-apps/api/core").then(({ invoke }) => {
+      import("@tauri-apps/api/core").then(({ invoke }) => {
         invoke<string>("read_bundled_resource", {
           filename: "easter-egg.md",
         }).then((text) => {

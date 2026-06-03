@@ -61,10 +61,38 @@ function TocTree({ items, activeId, onItemClick }: {
 function App() {
   const { theme, toggleTheme, zoomIn, zoomOut, canZoomIn, canZoomOut } = useTheme();
   const {
-    tabs, activeTabId, setActiveTabId,
+    tabs, activeTabId, setActiveTabId: setRawActiveTabId,
     content, setContent, filePath, isDirty,
-    openFile, saveFile, closeTab,
+    openFile: openFileFromHook, saveFile, closeTab, moveTab,
+    saveScrollPosition,
   } = useFileManager();
+
+  // Wrap setActiveTabId to save/restore scroll positions on tab switch
+  const setActiveTabId = useCallback((newTabId: string) => {
+    if (newTabId === activeTabId) return;
+    // Save current tab's scroll position BEFORE switching.
+    // In preview-only mode the textarea is unmounted, so the preview pane
+    // is the element that actually scrolls. Read whichever is currently active.
+    const previewScroll = previewPaneRef.current?.scrollTop ?? 0;
+    const sourceScroll = sourceRef.current?.scrollTop ?? 0;
+    const currentScrollPos = Math.max(previewScroll, sourceScroll);
+    saveScrollPosition(activeTabId, currentScrollPos);
+
+    // Switch tab
+    setRawActiveTabId(newTabId);
+  }, [activeTabId, saveScrollPosition, setRawActiveTabId]);
+
+  // Wrap openFile to scroll to top when a new file is opened
+  const openFile = useCallback(async () => {
+    const result = await openFileFromHook();
+    if (result === true) {
+      // New file opened, scroll to top
+      setTimeout(() => {
+        sourceRef.current?.scrollTo({ top: 0, behavior: "auto" });
+        previewPaneRef.current?.scrollTo({ top: 0, behavior: "auto" });
+      }, 0);
+    }
+  }, [openFileFromHook]);
   const [sourceVisible, setSourceVisible] = useState(false);
   const [splitRatio, setSplitRatio] = useState(0.25);
 
@@ -96,6 +124,82 @@ function App() {
   const previewPaneRef = useRef<HTMLDivElement>(null);
   const scrollSyncSource = useRef<"source" | "preview" | null>(null);
 
+  // Tab drag-and-drop reordering via pointer events (WKWebView's native HTML5
+  // drag-and-drop is unreliable, so we implement it manually).
+  const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
+  const [dragOverTabId, setDragOverTabId] = useState<string | null>(null);
+  const [dragOffsetX, setDragOffsetX] = useState(0);
+  const dragStartPos = useRef<{ x: number; tabId: string } | null>(null);
+  const justDraggedRef = useRef(false);
+
+  const handleTabPointerDown = useCallback(
+    (event: React.PointerEvent, tabId: string) => {
+      // Only start drag tracking on the tab body, not the close button
+      if ((event.target as HTMLElement).closest(".tab-close")) return;
+      dragStartPos.current = { x: event.clientX, tabId };
+    },
+    []
+  );
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      const start = dragStartPos.current;
+      if (!start) return;
+      // Begin dragging only after a small threshold to avoid hijacking clicks
+      if (!draggingTabId && Math.abs(event.clientX - start.x) < 5) return;
+
+      if (!draggingTabId) {
+        setDraggingTabId(start.tabId);
+      }
+
+      // Translate the dragged tab to follow the pointer (Chrome-like feel)
+      setDragOffsetX(event.clientX - start.x);
+
+      // Find which tab the pointer is over. The dragged tab is translated to
+      // follow the pointer and sits on top, so it would always match first.
+      // Skip it and look for the tab underneath instead.
+      const draggedId = draggingTabId ?? start.tabId;
+      const elements = document.elementsFromPoint(event.clientX, event.clientY);
+      const tabEl = elements.find(
+        (el) =>
+          el.classList.contains("tab-item") &&
+          (el as HTMLElement).dataset.tabId !== draggedId
+      ) as HTMLElement | undefined;
+      const overId = tabEl?.dataset.tabId ?? null;
+      setDragOverTabId(overId);
+    };
+
+    const handlePointerUp = () => {
+      const start = dragStartPos.current;
+      if (start && draggingTabId && dragOverTabId && draggingTabId !== dragOverTabId) {
+        const fromIndex = tabs.findIndex((t) => t.id === draggingTabId);
+        const toIndex = tabs.findIndex((t) => t.id === dragOverTabId);
+        if (fromIndex !== -1 && toIndex !== -1) {
+          moveTab(fromIndex, toIndex);
+        }
+      }
+      // Suppress the click that fires right after a drag so it doesn't
+      // switch tabs unintentionally.
+      if (draggingTabId) {
+        justDraggedRef.current = true;
+        setTimeout(() => {
+          justDraggedRef.current = false;
+        }, 0);
+      }
+      dragStartPos.current = null;
+      setDraggingTabId(null);
+      setDragOverTabId(null);
+      setDragOffsetX(0);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [draggingTabId, dragOverTabId, tabs, moveTab]);
+
   const handleMouseDown = useCallback(() => {
     isDragging.current = true;
     document.body.style.cursor = "col-resize";
@@ -125,8 +229,12 @@ function App() {
   }, []);
 
   const scrollSyncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isRestoringScroll = useRef(false);
 
   const handleSourceScroll = useCallback(() => {
+    // Skip sync if we're programmatically restoring scroll position
+    if (isRestoringScroll.current) return;
+
     // Sync backdrop scroll with textarea
     const source = sourceRef.current;
     if (source) {
@@ -153,6 +261,9 @@ function App() {
   }, []);
 
   const handlePreviewScroll = useCallback(() => {
+    // Skip sync if we're programmatically restoring scroll position
+    if (isRestoringScroll.current) return;
+
     if (scrollSyncSource.current === "source") return;
     scrollSyncSource.current = "preview";
     const source = sourceRef.current;
@@ -168,6 +279,61 @@ function App() {
       scrollSyncSource.current = null;
     }, 50);
   }, []);
+
+  // Restore scroll position when switching tabs
+  useEffect(() => {
+    const tab = tabs.find((t) => t.id === activeTabId);
+    const savedPosition = tab?.scrollPosition ?? 0;
+
+    isRestoringScroll.current = true;
+
+    // The target content may render asynchronously (mermaid, katex, images),
+    // so the scrollable height grows over several frames. Setting scrollTop
+    // before the height is large enough makes the browser clamp it to a
+    // smaller value (e.g. the previous shorter document's max). Keep retrying
+    // every frame until the scroll position actually sticks at the target,
+    // which only happens once the content has rendered tall enough.
+    let rafId = 0;
+    let attempts = 0;
+    const maxAttempts = 120; // ~2s at 60fps
+
+    const applyScroll = () => {
+      const preview = previewPaneRef.current;
+      const source = sourceRef.current;
+
+      if (source) {
+        source.scrollTop = savedPosition;
+      }
+      if (preview) {
+        preview.scrollTop = savedPosition;
+      }
+
+      attempts++;
+
+      const target = preview ?? source;
+      // Success: the container accepted the full target position. While the
+      // content is still too short, the browser clamps scrollTop to a smaller
+      // value, so keep retrying until it stops being clamped (or we time out).
+      const reached =
+        savedPosition === 0 ||
+        !target ||
+        Math.abs(target.scrollTop - savedPosition) <= 1;
+
+      if (reached || attempts >= maxAttempts) {
+        requestAnimationFrame(() => {
+          isRestoringScroll.current = false;
+        });
+        return;
+      }
+      rafId = requestAnimationFrame(applyScroll);
+    };
+
+    rafId = requestAnimationFrame(applyScroll);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+    };
+  }, [activeTabId, tabs]);
 
   // Highlight selected text in the other pane
   const highlightInPreview = useCallback((selectedText: string) => {
@@ -385,8 +551,24 @@ function App() {
           return (
             <div
               key={tab.id}
-              className={`tab-item${tab.id === activeTabId ? " tab-active" : ""}`}
-              onClick={() => setActiveTabId(tab.id)}
+              data-tab-id={tab.id}
+              className={`tab-item${tab.id === activeTabId ? " tab-active" : ""}${
+                draggingTabId === tab.id ? " tab-dragging" : ""
+              }${
+                dragOverTabId === tab.id && draggingTabId && draggingTabId !== tab.id
+                  ? " tab-drag-over"
+                  : ""
+              }`}
+              style={
+                draggingTabId === tab.id
+                  ? { transform: `translateX(${dragOffsetX}px)` }
+                  : undefined
+              }
+              onClick={() => {
+                if (justDraggedRef.current) return;
+                setActiveTabId(tab.id);
+              }}
+              onPointerDown={(e) => handleTabPointerDown(e, tab.id)}
             >
               <span className="tab-label">{tabDirty ? "● " : ""}{tabName}</span>
               <span

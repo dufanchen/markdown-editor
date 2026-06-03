@@ -4,3 +4,4 @@ target/
 .DS_Store
 *.dmg
 .aone_copilot/
+.idea/

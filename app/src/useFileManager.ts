@@ -9,6 +9,7 @@ export interface TabState {
   filePath: string | null;
   content: string;
   savedContent: string;
+  scrollPosition: number; // Save scroll position for each tab
 }
 
 let nextTabId = 1;
@@ -17,7 +18,7 @@ function generateTabId(): string {
 }
 
 function createEmptyTab(): TabState {
-  return { id: generateTabId(), filePath: null, content: "", savedContent: "" };
+  return { id: generateTabId(), filePath: null, content: "", savedContent: "", scrollPosition: 0 };
 }
 
 export function useFileManager() {
@@ -47,28 +48,32 @@ export function useFileManager() {
   const loadFileInNewTab = useCallback(
     async (path: string) => {
       try {
-        // If file is already open, switch to that tab
+        // If file is already open, switch to that tab (do NOT scroll to top)
         const existingTab = tabs.find((t) => t.filePath === path);
         if (existingTab) {
           setActiveTabId(existingTab.id);
-          return;
+          return false; // Not a new file
         }
         const text = await invoke<string>("read_file_content", { path });
         // If the current tab is empty and unmodified, reuse it
         if (!activeTab.filePath && activeTab.content === "" && activeTab.savedContent === "") {
-          updateActiveTab({ filePath: path, content: text, savedContent: text });
+          updateActiveTab({ filePath: path, content: text, savedContent: text, scrollPosition: 0 });
+          return true; // New file loaded
         } else {
           const newTab: TabState = {
             id: generateTabId(),
             filePath: path,
             content: text,
             savedContent: text,
+            scrollPosition: 0,
           };
           setTabs((prev) => [...prev, newTab]);
           setActiveTabId(newTab.id);
+          return true; // New file loaded
         }
       } catch (error) {
         console.error("Failed to read file:", path, error);
+        return false;
       }
     },
     [tabs, activeTab, updateActiveTab]
@@ -106,8 +111,9 @@ export function useFileManager() {
       filters: [{ name: "Markdown", extensions: ["md", "markdown", "txt"] }],
     });
     if (selected) {
-      await loadFileInNewTab(selected as string);
+      return await loadFileInNewTab(selected as string);
     }
+    return false;
   }, [loadFileInNewTab]);
 
   const saveFile = useCallback(async () => {
@@ -145,6 +151,32 @@ export function useFileManager() {
     [activeTabId]
   );
 
+  const moveTab = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      setTabs((prev) => {
+        if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || toIndex >= prev.length) {
+          return prev;
+        }
+        const newTabs = [...prev];
+        const [movedTab] = newTabs.splice(fromIndex, 1);
+        newTabs.splice(toIndex, 0, movedTab);
+        return newTabs;
+      });
+    },
+    []
+  );
+
+  const saveScrollPosition = useCallback(
+    (tabId: string, scrollPosition: number) => {
+      setTabs((prev) =>
+        prev.map((tab) =>
+          tab.id === tabId ? { ...tab, scrollPosition } : tab
+        )
+      );
+    },
+    []
+  );
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -176,5 +208,7 @@ export function useFileManager() {
     openFile,
     saveFile,
     closeTab,
+    moveTab,
+    saveScrollPosition,
   };
 }

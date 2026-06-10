@@ -2,7 +2,14 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { renderMarkdown } from "./renderer";
 import { useTheme } from "./useTheme";
 import { useFileManager } from "./useFileManager";
+import { invoke } from "@tauri-apps/api/core";
 import mermaid from "mermaid";
+
+interface DirectoryEntry {
+  name: string;
+  path: string;
+  is_directory: boolean;
+}
 import "./App.css";
 
 interface TocNode {
@@ -58,13 +65,54 @@ function TocTree({ items, activeId, onItemClick }: {
   return <>{renderNodes(tree, 0)}</>;
 }
 
+function FileTree({ entries, expandedDirs, dirChildren, currentFilePath, onClickEntry, depth = 0 }: {
+  entries: DirectoryEntry[];
+  expandedDirs: Set<string>;
+  dirChildren: Map<string, DirectoryEntry[]>;
+  currentFilePath: string | null;
+  onClickEntry: (entry: DirectoryEntry) => void;
+  depth?: number;
+}) {
+  return (
+    <ul className={`file-tree${depth > 0 ? " file-tree-nested" : ""}`}>
+      {entries.map((entry) => {
+        const isExpanded = expandedDirs.has(entry.path);
+        const isActive = entry.path === currentFilePath;
+        const isDisabledFile = !entry.is_directory && !entry.name.toLowerCase().endsWith(".md");
+        return (
+          <li key={entry.path} className={`file-tree-node${entry.is_directory && isExpanded ? " file-tree-node-expanded" : ""}`}>
+            <div
+              className={`file-tree-item${isActive ? " is-active" : ""}${isDisabledFile ? " is-disabled" : ""}`}
+              onClick={() => !isDisabledFile && onClickEntry(entry)}
+              title={entry.name}
+            >
+              <span className="file-tree-icon">{entry.is_directory ? (isExpanded ? "📂" : "📁") : "📄"}</span>
+              <span className="file-tree-name">{entry.name}</span>
+            </div>
+            {entry.is_directory && isExpanded && (
+              <FileTree
+                entries={dirChildren.get(entry.path) || []}
+                expandedDirs={expandedDirs}
+                dirChildren={dirChildren}
+                currentFilePath={currentFilePath}
+                onClickEntry={onClickEntry}
+                depth={depth + 1}
+              />
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function App() {
   const { theme, toggleTheme, zoomIn, zoomOut, canZoomIn, canZoomOut } = useTheme();
   const {
     tabs, activeTabId, setActiveTabId: setRawActiveTabId,
     content, setContent, filePath, isDirty,
     openFile: openFileFromHook, saveFile, closeTab, moveTab,
-    saveScrollPosition,
+    saveScrollPosition, loadFileInNewTab,
   } = useFileManager();
 
   // Wrap setActiveTabId to save/restore scroll positions on tab switch
@@ -95,6 +143,110 @@ function App() {
   }, [openFileFromHook]);
   const [sourceVisible, setSourceVisible] = useState(false);
   const [splitRatio, setSplitRatio] = useState(0.25);
+
+  // File explorer state
+  const [explorerVisible, setExplorerVisible] = useState(true);
+  const [explorerRootDir, setExplorerRootDir] = useState<string | null>(null);
+  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
+  const [dirChildren, setDirChildren] = useState<Map<string, DirectoryEntry[]>>(new Map());
+  const [explorerWidth, setExplorerWidth] = useState(200);
+  const isExplorerDragging = useRef(false);
+  const openedFromExplorer = useRef(false);
+
+  // Load a directory's children
+  const loadDirChildren = useCallback(async (dirPath: string) => {
+    try {
+      const entries = await invoke<DirectoryEntry[]>("list_directory_files", { path: dirPath });
+      setDirChildren((prev) => new Map(prev).set(dirPath, entries));
+    } catch {
+      setDirChildren((prev) => new Map(prev).set(dirPath, []));
+    }
+  }, []);
+
+  // Set root directory and load it when file changes —
+  // but ONLY when the file was opened via "打开" dialog, not via explorer click
+  useEffect(() => {
+    if (!filePath) {
+      setExplorerRootDir(null);
+      return;
+    }
+    if (openedFromExplorer.current) {
+      openedFromExplorer.current = false;
+      return;
+    }
+    const parentDir = filePath.substring(0, filePath.lastIndexOf("/"));
+    if (!parentDir || parentDir === explorerRootDir) return;
+    setExplorerRootDir(parentDir);
+    setExpandedDirs(new Set());
+    setDirChildren(new Map());
+    loadDirChildren(parentDir);
+  }, [filePath]);
+
+  const handleToggleDir = useCallback((dirPath: string) => {
+    setExpandedDirs((prev) => {
+      const next = new Set(prev);
+      if (next.has(dirPath)) {
+        next.delete(dirPath);
+      } else {
+        next.add(dirPath);
+        if (!dirChildren.has(dirPath)) {
+          loadDirChildren(dirPath);
+        }
+      }
+      return next;
+    });
+  }, [dirChildren, loadDirChildren]);
+
+  const handleExplorerFileClick = useCallback(async (entry: DirectoryEntry) => {
+    if (entry.is_directory) {
+      handleToggleDir(entry.path);
+    } else {
+      openedFromExplorer.current = true;
+      await loadFileInNewTab(entry.path);
+    }
+  }, [loadFileInNewTab, handleToggleDir]);
+
+  const navigateToParentDir = useCallback(() => {
+    if (!explorerRootDir) return;
+    const parentDir = explorerRootDir.substring(0, explorerRootDir.lastIndexOf("/"));
+    if (parentDir) {
+      // Auto-expand the old root so its contents remain visible
+      setExpandedDirs((prev) => new Set(prev).add(explorerRootDir));
+      setExplorerRootDir(parentDir);
+      if (!dirChildren.has(parentDir)) {
+        loadDirChildren(parentDir);
+      }
+    }
+  }, [explorerRootDir, loadDirChildren, dirChildren]);
+
+  // Explorer width drag resize
+  const handleExplorerDragStart = useCallback(() => {
+    isExplorerDragging.current = true;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }, []);
+
+  useEffect(() => {
+    const handleExplorerDragMove = (event: MouseEvent) => {
+      if (!isExplorerDragging.current || !containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const newWidth = event.clientX - rect.left;
+      setExplorerWidth(Math.max(120, Math.min(400, newWidth)));
+    };
+    const handleExplorerDragEnd = () => {
+      if (isExplorerDragging.current) {
+        isExplorerDragging.current = false;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      }
+    };
+    document.addEventListener("mousemove", handleExplorerDragMove);
+    document.addEventListener("mouseup", handleExplorerDragEnd);
+    return () => {
+      document.removeEventListener("mousemove", handleExplorerDragMove);
+      document.removeEventListener("mouseup", handleExplorerDragEnd);
+    };
+  }, []);
 
 
 
@@ -388,10 +540,12 @@ function App() {
   }, [highlightInPreview]);
 
   const handlePreviewMouseUp = useCallback(() => {
+    // In preview-only mode, skip state update to avoid re-render clearing selection
+    if (!sourceVisible) return;
     const selection = window.getSelection();
     const selectedText = selection?.toString() || "";
     setSourceHighlightText(selectedText.length >= 2 ? selectedText : "");
-  }, []);
+  }, [sourceVisible]);
 
   // Debounced markdown rendering for editing performance
   const [renderedHtml, setRenderedHtml] = useState(() => renderMarkdown(content));
@@ -524,6 +678,12 @@ function App() {
           <button className="toolbar-text-btn" onClick={openFile} title="⌘O">打开</button>
           <button className="toolbar-text-btn" onClick={saveFile} title="⌘S" disabled={!isDirty}>保存</button>
           <button
+            className={`toolbar-text-btn${explorerVisible ? " toolbar-text-btn-active" : ""}`}
+            onClick={() => setExplorerVisible(!explorerVisible)}
+          >
+            目录
+          </button>
+          <button
             className="toolbar-text-btn"
             onClick={() => setSourceVisible(!sourceVisible)}
           >
@@ -583,6 +743,42 @@ function App() {
       </div>
 
       <main className="editor-container" ref={containerRef}>
+        {explorerVisible && explorerRootDir && (
+          <>
+            <aside className="file-explorer" style={{ width: explorerWidth }}>
+              <div className="file-explorer-header">
+                <button className="file-explorer-up" onClick={navigateToParentDir} title="上级目录">←</button>
+                <span className="file-explorer-dir-name" title={explorerRootDir}>
+                  {explorerRootDir.split("/").pop()}
+                </span>
+                <button
+                  className="file-explorer-home"
+                  onClick={() => {
+                    if (!filePath) return;
+                    const parentDir = filePath.substring(0, filePath.lastIndexOf("/"));
+                    if (parentDir && parentDir !== explorerRootDir) {
+                      setExplorerRootDir(parentDir);
+                      setExpandedDirs(new Set());
+                      setDirChildren(new Map());
+                      loadDirChildren(parentDir);
+                    }
+                  }}
+                  title="回到当前文件所在目录"
+                >回到当前文件夹</button>
+              </div>
+              <div className="file-explorer-list">
+                <FileTree
+                  entries={dirChildren.get(explorerRootDir) || []}
+                  expandedDirs={expandedDirs}
+                  dirChildren={dirChildren}
+                  currentFilePath={filePath}
+                  onClickEntry={handleExplorerFileClick}
+                />
+              </div>
+            </aside>
+            <div className="explorer-divider" onMouseDown={handleExplorerDragStart} />
+          </>
+        )}
         {sourceVisible && (
           <>
             <div className="source-pane" style={{ width: `${splitRatio * 100}%` }}>

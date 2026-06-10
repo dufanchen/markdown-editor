@@ -210,5 +210,6 @@ export function useFileManager() {
     closeTab,
     moveTab,
     saveScrollPosition,
+    loadFileInNewTab,
   };
 }

@@ -266,6 +266,150 @@ body {
   overflow: hidden;
 }
 
+/* ========== File Explorer ========== */
+.file-explorer {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.explorer-divider {
+  width: 3px;
+  cursor: col-resize;
+  background: var(--border-light);
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.explorer-divider:hover {
+  background: var(--text-tertiary);
+}
+
+.file-explorer-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.file-explorer-up,
+.file-explorer-home {
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: calc(13px * var(--font-size-scale, 1));
+  padding: 2px 6px;
+  border-radius: 3px;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.file-explorer-up:hover,
+.file-explorer-home:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.file-explorer-home {
+  margin-left: auto;
+  font-size: calc(10px * var(--font-size-scale, 1));
+}
+
+.file-explorer-dir-name {
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--font-size-scale, 1));
+  font-weight: 400;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-explorer-list {
+  overflow-y: auto;
+  flex: 1;
+  padding: 4px 0;
+}
+
+/* ---- Tree structure ---- */
+.file-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.file-tree-nested {
+  margin-left: 8px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border-light);
+}
+
+.file-tree-node {
+  position: relative;
+}
+
+.file-tree-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: calc(12px * var(--font-size-scale, 1));
+  font-weight: 300;
+  color: var(--text-secondary);
+  transition: background 0.12s, color 0.12s;
+  white-space: nowrap;
+  overflow: hidden;
+  user-select: none;
+}
+
+.file-tree-item:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.file-tree-item.is-active {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+  font-weight: 400;
+}
+
+.file-tree-item.is-disabled {
+  color: var(--text-tertiary);
+  opacity: 0.45;
+  cursor: default;
+}
+
+.file-tree-item.is-disabled:hover {
+  background: transparent;
+  color: var(--text-tertiary);
+}
+
+.file-tree-icon {
+  font-size: calc(12px * var(--font-size-scale, 1));
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.file-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Active toolbar button */
+.toolbar-text-btn.toolbar-text-btn-active {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
 /* ========== Divider (Drag Handle) ========== */
 .divider {
   width: 1px;

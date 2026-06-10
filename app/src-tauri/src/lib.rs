@@ -3,6 +3,13 @@ use tauri::{Manager, RunEvent, Emitter};
 
 struct OpenedFile(Arc<Mutex<Option<String>>>);
 
+#[derive(serde::Serialize)]
+struct DirectoryEntry {
+  name: String,
+  path: String,
+  is_directory: bool,
+}
+
 #[tauri::command]
 fn get_opened_file(state: tauri::State<'_, OpenedFile>) -> Option<String> {
   state.0.lock().unwrap().clone()
@@ -11,6 +18,34 @@ fn get_opened_file(state: tauri::State<'_, OpenedFile>) -> Option<String> {
 #[tauri::command]
 fn read_file_content(path: String) -> Result<String, String> {
   std::fs::read_to_string(&path).map_err(|e| format!("Failed to read {}: {}", path, e))
+}
+
+#[tauri::command]
+fn list_directory_files(path: String) -> Result<Vec<DirectoryEntry>, String> {
+  let entries = std::fs::read_dir(&path)
+    .map_err(|e| format!("Failed to read directory {}: {}", path, e))?;
+
+  let mut result: Vec<DirectoryEntry> = entries
+    .filter_map(|entry| {
+      let entry = entry.ok()?;
+      let name = entry.file_name().to_string_lossy().to_string();
+      // Skip hidden files
+      if name.starts_with('.') {
+        return None;
+      }
+      let file_path = entry.path().to_string_lossy().to_string();
+      let is_directory = entry.file_type().ok()?.is_dir();
+      Some(DirectoryEntry { name, path: file_path, is_directory })
+    })
+    .collect();
+
+  // Sort: directories first, then alphabetically by name (case-insensitive)
+  result.sort_by(|a, b| {
+    b.is_directory.cmp(&a.is_directory)
+      .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+  });
+
+  Ok(result)
 }
 
 #[tauri::command]
@@ -35,7 +70,7 @@ pub fn run() {
     .plugin(tauri_plugin_fs::init())
     .plugin(tauri_plugin_shell::init())
     .manage(OpenedFile(opened_file.clone()))
-    .invoke_handler(tauri::generate_handler![get_opened_file, read_file_content, read_bundled_resource])
+    .invoke_handler(tauri::generate_handler![get_opened_file, read_file_content, read_bundled_resource, list_directory_files])
     .setup(|_app| {
       Ok(())
     })

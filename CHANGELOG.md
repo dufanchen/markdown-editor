@@ -5,6 +5,20 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.0] - 2026-06-11
+
+### 新增
+- IDE 风格树状文件目录侧边栏，竖线引导层级
+- 文件夹展开/折叠，非 `.md` 文件置灰不可点击
+- 目录宽度可拖拽调整
+- "回到当前文件夹"快捷按钮
+- 目录字体跟随全局缩放
+- 从目录导航打开文件不重置已展开的目录结构
+- 向上展开目录时保持已展开的子文件夹状态
+
+### 修复
+- 预览模式下选中文字松开鼠标后选区丢失
+
 ## [0.2.0] - 2026-06-04
 
 ### 新增
@@ -29,5 +43,6 @@
 - 外部链接以系统默认浏览器打开
 - Monochrome (Ivory Ledger) 极简排版与编辑/预览双向高亮
 
+[0.3.0]: https://github.com/dufanchen/markdown-editor/releases/tag/v0.3.0
 [0.2.0]: https://github.com/dufanchen/markdown-editor/releases/tag/v0.2.0
 [0.1.0]: https://github.com/dufanchen/markdown-editor/releases/tag/v0.1.0

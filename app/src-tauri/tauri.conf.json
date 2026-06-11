@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "因为产出了很多MD文档所以需要一个简单免费的MD文件查看编辑软件",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "identifier": "com.markdown-editor.app",
   "build": {
     "frontendDist": "../dist",

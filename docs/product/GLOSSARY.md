@@ -21,5 +21,5 @@ The layout when Source Pane is collapsed, showing only the rendered Preview Pane
 _Avoid_: Read mode, view mode
 
 **Document**:
-A single .md file opened by the user. The app handles one Document at a time.
+A single `.md` or supported text file opened by the user. The app can keep multiple Documents open as tabs.
 _Avoid_: File, note, page

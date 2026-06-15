@@ -1,8 +1,9 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { message, open, save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export interface TabState {
   id: string;
@@ -10,6 +11,8 @@ export interface TabState {
   content: string;
   savedContent: string;
   scrollPosition: number; // Save scroll position for each tab
+  externalChangeState: "none" | "changed" | "deleted" | "error";
+  externalContent: string | null;
 }
 
 let nextTabId = 1;
@@ -18,8 +21,22 @@ function generateTabId(): string {
 }
 
 function createEmptyTab(): TabState {
-  return { id: generateTabId(), filePath: null, content: "", savedContent: "", scrollPosition: 0 };
+  return {
+    id: generateTabId(),
+    filePath: null,
+    content: "",
+    savedContent: "",
+    scrollPosition: 0,
+    externalChangeState: "none",
+    externalContent: null,
+  };
 }
+
+function isTauriRuntime(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+type DirtyCloseAction = "save" | "discard" | "cancel";
 
 export function useFileManager() {
   const [tabs, setTabs] = useState<TabState[]>([createEmptyTab()]);
@@ -57,7 +74,14 @@ export function useFileManager() {
         const text = await invoke<string>("read_file_content", { path });
         // If the current tab is empty and unmodified, reuse it
         if (!activeTab.filePath && activeTab.content === "" && activeTab.savedContent === "") {
-          updateActiveTab({ filePath: path, content: text, savedContent: text, scrollPosition: 0 });
+          updateActiveTab({
+            filePath: path,
+            content: text,
+            savedContent: text,
+            scrollPosition: 0,
+            externalChangeState: "none",
+            externalContent: null,
+          });
           return true; // New file loaded
         } else {
           const newTab: TabState = {
@@ -66,6 +90,8 @@ export function useFileManager() {
             content: text,
             savedContent: text,
             scrollPosition: 0,
+            externalChangeState: "none",
+            externalContent: null,
           };
           setTabs((prev) => [...prev, newTab]);
           setActiveTabId(newTab.id);
@@ -83,6 +109,7 @@ export function useFileManager() {
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
+    if (!isTauriRuntime()) return;
     let attempts = 0;
     const poll = () => {
       invoke<string | null>("get_opened_file").then((path) => {
@@ -99,6 +126,7 @@ export function useFileManager() {
 
   // Listen for files opened while app is running
   useEffect(() => {
+    if (!isTauriRuntime()) return;
     const unlisten = listen<string>("file-opened", (event) => {
       loadFileInNewTab(event.payload);
     });
@@ -106,6 +134,7 @@ export function useFileManager() {
   }, [loadFileInNewTab]);
 
   const openFile = useCallback(async () => {
+    if (!isTauriRuntime()) return false;
     const selected = await open({
       multiple: false,
       filters: [{ name: "Markdown", extensions: ["md", "markdown", "txt"] }],
@@ -117,38 +146,215 @@ export function useFileManager() {
   }, [loadFileInNewTab]);
 
   const saveFile = useCallback(async () => {
+    if (!isTauriRuntime()) return;
     if (!filePath) {
       const path = await save({
         filters: [{ name: "Markdown", extensions: ["md", "markdown"] }],
       });
       if (path) {
         await writeTextFile(path, content);
-        updateActiveTab({ filePath: path, savedContent: content });
+        updateActiveTab({
+          filePath: path,
+          savedContent: content,
+          externalChangeState: "none",
+          externalContent: null,
+        });
       }
     } else {
       await writeTextFile(filePath, content);
-      updateActiveTab({ savedContent: content });
+      updateActiveTab({ savedContent: content, externalChangeState: "none", externalContent: null });
     }
   }, [filePath, content, updateActiveTab]);
 
+  const saveTab = useCallback(async (tab: TabState) => {
+    if (!isTauriRuntime()) return false;
+    try {
+      if (!tab.filePath) {
+        const path = await save({
+          filters: [{ name: "Markdown", extensions: ["md", "markdown"] }],
+        });
+        if (!path) return false;
+        await writeTextFile(path, tab.content);
+        setTabs((prev) =>
+          prev.map((current) =>
+            current.id === tab.id
+              ? {
+                  ...current,
+                  filePath: path,
+                  savedContent: tab.content,
+                  externalChangeState: "none",
+                  externalContent: null,
+                }
+              : current
+          )
+        );
+        return true;
+      }
+
+      await writeTextFile(tab.filePath, tab.content);
+      setTabs((prev) =>
+        prev.map((current) =>
+          current.id === tab.id
+            ? {
+                ...current,
+                savedContent: tab.content,
+                externalChangeState: "none",
+                externalContent: null,
+              }
+            : current
+        )
+      );
+      return true;
+    } catch (error) {
+      console.error("Failed to save tab before closing:", error);
+      await message("保存失败，文档已保留在当前窗口中。", {
+        title: "保存失败",
+        kind: "error",
+      });
+      return false;
+    }
+  }, []);
+
+  const getDirtyCloseAction = useCallback(async (): Promise<DirtyCloseAction> => {
+    if (!isTauriRuntime()) {
+      return window.confirm("当前文档有未保存修改。关闭会丢失这些修改，是否继续关闭？")
+        ? "discard"
+        : "cancel";
+    }
+
+    const result = await message("当前文档有未保存修改。关闭前要保存吗？", {
+      title: "关闭文档",
+      kind: "warning",
+      buttons: { yes: "保存", no: "不保存", cancel: "取消" },
+    });
+
+    if (result === "保存" || result === "Yes") return "save";
+    if (result === "不保存" || result === "No") return "discard";
+    return "cancel";
+  }, []);
+
+  const closeCurrentWindow = useCallback(async () => {
+    if (isTauriRuntime()) {
+      await getCurrentWindow().close();
+      return;
+    }
+    window.close();
+  }, []);
+
+  const reloadExternalContent = useCallback((tabId: string) => {
+    setTabs((prev) =>
+      prev.map((tab) => {
+        if (tab.id !== tabId || tab.externalContent === null) return tab;
+        return {
+          ...tab,
+          content: tab.externalContent,
+          savedContent: tab.externalContent,
+          externalChangeState: "none",
+          externalContent: null,
+        };
+      })
+    );
+  }, []);
+
+  const dismissExternalChange = useCallback((tabId: string) => {
+    setTabs((prev) =>
+      prev.map((tab) =>
+        tab.id === tabId
+          ? {
+              ...tab,
+              savedContent: tab.externalContent ?? tab.savedContent,
+              externalChangeState: "none",
+              externalContent: null,
+            }
+          : tab
+      )
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    const intervalId = window.setInterval(() => {
+      tabs.forEach((tab) => {
+        if (!tab.filePath || tab.externalChangeState !== "none") return;
+        invoke<string>("read_file_content", { path: tab.filePath })
+          .then((diskContent) => {
+            setTabs((prev) =>
+              prev.map((current) => {
+                if (current.id !== tab.id || !current.filePath) return current;
+                if (diskContent === current.savedContent) return current;
+
+                const isDirty = current.content !== current.savedContent;
+                if (isDirty) {
+                  if (current.content === diskContent) {
+                    return {
+                      ...current,
+                      savedContent: diskContent,
+                      externalChangeState: "none",
+                      externalContent: null,
+                    };
+                  }
+                  return {
+                    ...current,
+                    externalChangeState: "changed",
+                    externalContent: diskContent,
+                  };
+                }
+
+                return {
+                  ...current,
+                  content: diskContent,
+                  savedContent: diskContent,
+                  externalChangeState: "none",
+                  externalContent: null,
+                };
+              })
+            );
+          })
+          .catch(() => {
+            setTabs((prev) =>
+              prev.map((current) =>
+                current.id === tab.id
+                  ? { ...current, externalChangeState: "deleted", externalContent: null }
+                  : current
+              )
+            );
+          });
+      });
+    }, 1500);
+
+    return () => window.clearInterval(intervalId);
+  }, [tabs]);
+
   const closeTab = useCallback(
-    (tabId: string) => {
-      setTabs((prev) => {
-        if (prev.length === 1) {
-          const newTab = createEmptyTab();
-          setActiveTabId(newTab.id);
-          return [newTab];
+    async (tabId: string) => {
+      const tab = tabs.find((item) => item.id === tabId);
+      if (!tab) return;
+
+      if (tab.content !== tab.savedContent) {
+        const action = await getDirtyCloseAction();
+        if (action === "cancel") return;
+        if (action === "save") {
+          const saved = await saveTab(tab);
+          if (!saved) return;
         }
-        const filtered = prev.filter((t) => t.id !== tabId);
+      }
+
+      if (tabs.length === 1) {
+        await closeCurrentWindow();
+        return;
+      }
+
+      setTabs((prev) => {
+        const filtered = prev.filter((item) => item.id !== tabId);
         if (activeTabId === tabId) {
-          const closedIndex = prev.findIndex((t) => t.id === tabId);
+          const closedIndex = prev.findIndex((item) => item.id === tabId);
           const nextIndex = Math.min(closedIndex, filtered.length - 1);
           setActiveTabId(filtered[nextIndex].id);
         }
         return filtered;
       });
     },
-    [activeTabId]
+    [activeTabId, closeCurrentWindow, getDirtyCloseAction, saveTab, tabs]
   );
 
   const moveTab = useCallback(
@@ -190,7 +396,7 @@ export function useFileManager() {
       }
       if ((event.metaKey || event.ctrlKey) && event.key === "w") {
         event.preventDefault();
-        closeTab(activeTabId);
+        void closeTab(activeTabId);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -205,11 +411,14 @@ export function useFileManager() {
     setContent,
     filePath,
     isDirty,
+    activeTab,
     openFile,
     saveFile,
     closeTab,
     moveTab,
     saveScrollPosition,
     loadFileInNewTab,
+    reloadExternalContent,
+    dismissExternalChange,
   };
 }

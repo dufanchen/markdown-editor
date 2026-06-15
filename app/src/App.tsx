@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { renderMarkdown } from "./renderer";
 import { useTheme } from "./useTheme";
 import { useFileManager } from "./useFileManager";
@@ -17,6 +17,106 @@ interface TocNode {
   text: string;
   id: string;
   children: TocNode[];
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function findTextMatches(content: string, query: string): { start: number; end: number }[] {
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery) return [];
+  const matches: { start: number; end: number }[] = [];
+  const lowerContent = content.toLocaleLowerCase();
+  const lowerQuery = trimmedQuery.toLocaleLowerCase();
+  let index = lowerContent.indexOf(lowerQuery);
+  while (index !== -1) {
+    matches.push({ start: index, end: index + trimmedQuery.length });
+    index = lowerContent.indexOf(lowerQuery, index + trimmedQuery.length);
+  }
+  return matches;
+}
+
+function clearPreviewSearchHighlights(root: HTMLElement) {
+  root.querySelectorAll("mark.search-highlight").forEach((mark) => {
+    const parent = mark.parentNode;
+    if (!parent) return;
+    parent.replaceChild(document.createTextNode(mark.textContent || ""), mark);
+    parent.normalize();
+  });
+}
+
+function markPreviewSearchHighlights(root: HTMLElement, query: string, activeIndex: number) {
+  clearPreviewSearchHighlights(root);
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery) return;
+
+  const lowerQuery = trimmedQuery.toLocaleLowerCase();
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const textNodes: Text[] = [];
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text;
+    const parent = node.parentElement;
+    if (!parent || parent.closest("mark.search-highlight, .mermaid")) continue;
+    if (!node.nodeValue?.toLocaleLowerCase().includes(lowerQuery)) continue;
+    textNodes.push(node);
+  }
+
+  let matchIndex = 0;
+  for (const node of textNodes) {
+    const text = node.nodeValue || "";
+    const lowerText = text.toLocaleLowerCase();
+    const fragment = document.createDocumentFragment();
+    let cursor = 0;
+    let index = lowerText.indexOf(lowerQuery);
+
+    while (index !== -1) {
+      if (index > cursor) {
+        fragment.appendChild(document.createTextNode(text.slice(cursor, index)));
+      }
+      const mark = document.createElement("mark");
+      mark.className =
+        matchIndex === activeIndex
+          ? "search-highlight search-highlight-active"
+          : "search-highlight";
+      mark.dataset.searchIndex = String(matchIndex);
+      mark.textContent = text.slice(index, index + trimmedQuery.length);
+      fragment.appendChild(mark);
+      matchIndex++;
+      cursor = index + trimmedQuery.length;
+      index = lowerText.indexOf(lowerQuery, cursor);
+    }
+
+    if (cursor < text.length) {
+      fragment.appendChild(document.createTextNode(text.slice(cursor)));
+    }
+    node.parentNode?.replaceChild(fragment, node);
+  }
+}
+
+function renderSourceBackdrop(content: string, sourceHighlightText: string, searchQuery: string) {
+  let html = escapeHtml(content);
+  const highlights: { className: string; query: string }[] = [];
+  if (searchQuery.trim()) {
+    highlights.push({ className: "search-highlight", query: searchQuery.trim() });
+  }
+  if (sourceHighlightText.length >= 2) {
+    highlights.push({ className: "sync-highlight", query: sourceHighlightText });
+  }
+  for (const highlight of highlights) {
+    html = html.replace(
+      new RegExp(escapeRegExp(escapeHtml(highlight.query)), "gi"),
+      `<mark class="${highlight.className}">$&</mark>`
+    );
+  }
+  return `${html}\n`;
 }
 
 function buildTocTree(items: { level: number; text: string; id: string }[]): TocNode[] {
@@ -112,7 +212,8 @@ function App() {
     tabs, activeTabId, setActiveTabId: setRawActiveTabId,
     content, setContent, filePath, isDirty,
     openFile: openFileFromHook, saveFile, closeTab, moveTab,
-    saveScrollPosition, loadFileInNewTab,
+    saveScrollPosition, loadFileInNewTab, activeTab,
+    reloadExternalContent, dismissExternalChange,
   } = useFileManager();
 
   // Wrap setActiveTabId to save/restore scroll positions on tab switch
@@ -180,7 +281,7 @@ function App() {
     setExpandedDirs(new Set());
     setDirChildren(new Map());
     loadDirChildren(parentDir);
-  }, [filePath]);
+  }, [filePath, explorerRootDir, loadDirChildren]);
 
   const handleToggleDir = useCallback((dirPath: string) => {
     setExpandedDirs((prev) => {
@@ -274,7 +375,63 @@ function App() {
   const previewRef = useRef<HTMLDivElement>(null);
   const sourceRef = useRef<HTMLTextAreaElement>(null);
   const previewPaneRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const scrollSyncSource = useRef<"source" | "preview" | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeSearchIndex, setActiveSearchIndex] = useState(0);
+  const previousSearchQuery = useRef("");
+
+  const searchMatches = useMemo(
+    () => findTextMatches(content, searchQuery),
+    [content, searchQuery]
+  );
+  const searchMatchCount = searchMatches.length;
+  const hasSearchQuery = searchQuery.trim().length > 0;
+  const hasSearchMatches = searchMatchCount > 0;
+
+  useEffect(() => {
+    const normalizedQuery = searchQuery.trim();
+    setActiveSearchIndex((currentIndex) => {
+      if (!normalizedQuery || searchMatchCount === 0) return 0;
+      if (previousSearchQuery.current !== normalizedQuery) return 0;
+      return Math.min(currentIndex, searchMatchCount - 1);
+    });
+    previousSearchQuery.current = normalizedQuery;
+  }, [searchQuery, searchMatchCount]);
+
+  const goToSearchMatch = useCallback((direction: 1 | -1) => {
+    if (searchMatchCount === 0) return;
+    setActiveSearchIndex((currentIndex) =>
+      (currentIndex + direction + searchMatchCount) % searchMatchCount
+    );
+  }, [searchMatchCount]);
+
+  useEffect(() => {
+    const handleFindShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      }
+    };
+    window.addEventListener("keydown", handleFindShortcut);
+    return () => window.removeEventListener("keydown", handleFindShortcut);
+  }, []);
+
+  const handleSearchKeyDown = useCallback((event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      goToSearchMatch(event.shiftKey ? -1 : 1);
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      if (searchQuery) {
+        setSearchQuery("");
+      } else {
+        searchInputRef.current?.blur();
+      }
+    }
+  }, [goToSearchMatch, searchQuery]);
 
   // Tab drag-and-drop reordering via pointer events (WKWebView's native HTML5
   // drag-and-drop is unreliable, so we implement it manually).
@@ -563,6 +720,32 @@ function App() {
     return () => { if (renderTimer.current) clearTimeout(renderTimer.current); };
   }, [content, sourceVisible]);
 
+  useEffect(() => {
+    const preview = previewRef.current;
+    if (!preview) return;
+    markPreviewSearchHighlights(preview, searchQuery, activeSearchIndex);
+    if (!hasSearchQuery || !hasSearchMatches) return;
+
+    const activeMark = preview.querySelector(
+      `mark.search-highlight[data-search-index="${activeSearchIndex}"]`
+    );
+    if (activeMark) {
+      activeMark.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [renderedHtml, searchQuery, activeSearchIndex, hasSearchQuery, hasSearchMatches]);
+
+  useEffect(() => {
+    const source = sourceRef.current;
+    const activeMatch = searchMatches[activeSearchIndex];
+    if (!sourceVisible || !source || !activeMatch) return;
+    source.setSelectionRange(activeMatch.start, activeMatch.end);
+
+    const lineHeight = Number.parseFloat(window.getComputedStyle(source).lineHeight) || 22;
+    const lineCountBeforeMatch = content.slice(0, activeMatch.start).split("\n").length - 1;
+    source.scrollTop = Math.max(0, lineCountBeforeMatch * lineHeight - source.clientHeight / 2);
+    handleSourceScroll();
+  }, [activeSearchIndex, searchMatches, sourceVisible, content, handleSourceScroll]);
+
   // Extract TOC headings from markdown content, excluding code blocks
   const tocItems = useMemo(() => {
     // Strip fenced code blocks before extracting headings
@@ -574,7 +757,7 @@ function App() {
     while ((match = headingRegex.exec(stripped)) !== null) {
       const level = match[1].length;
       const rawText = match[2].trim();
-      const text = rawText.replace(/[*_`~\[\]()]/g, "");
+      const text = rawText.replace(/[*_`~()[\]]/g, "");
       // Match markdown-it-anchor default slugify
       let slug = encodeURIComponent(
         String(text).trim().toLowerCase().replace(/\s+/g, "-")
@@ -692,6 +875,41 @@ function App() {
         </div>
         <div className="toolbar-center" />
         <div className="toolbar-right">
+          <div className={`search-box${hasSearchQuery && !hasSearchMatches ? " search-box-empty" : ""}`}>
+            <input
+              ref={searchInputRef}
+              className="search-input"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              onKeyDown={handleSearchKeyDown}
+              placeholder="搜索"
+              title="⌘F"
+            />
+            <span className="search-count">
+              {hasSearchQuery ? `${hasSearchMatches ? activeSearchIndex + 1 : 0}/${searchMatchCount}` : "0/0"}
+            </span>
+            <button
+              className="search-nav-btn"
+              onClick={() => goToSearchMatch(-1)}
+              disabled={!hasSearchMatches}
+              title="上一个"
+            >
+              ↑
+            </button>
+            <button
+              className="search-nav-btn"
+              onClick={() => goToSearchMatch(1)}
+              disabled={!hasSearchMatches}
+              title="下一个"
+            >
+              ↓
+            </button>
+            {hasSearchQuery && (
+              <button className="search-nav-btn" onClick={() => setSearchQuery("")} title="清除">
+                ×
+              </button>
+            )}
+          </div>
           <button className="toolbar-text-btn" onClick={zoomOut} disabled={!canZoomOut} title="缩小字体">
             缩小
           </button>
@@ -742,6 +960,22 @@ function App() {
         })}
       </div>
 
+      {activeTab.externalChangeState !== "none" && (
+        <div className="external-change-banner">
+          <span>
+            {activeTab.externalChangeState === "changed"
+              ? "磁盘上的文件已更新"
+              : "文件已不存在或无法读取"}
+          </span>
+          {activeTab.externalChangeState === "changed" && (
+            <>
+              <button onClick={() => reloadExternalContent(activeTab.id)}>重新载入</button>
+              <button onClick={() => dismissExternalChange(activeTab.id)}>保留当前编辑</button>
+            </>
+          )}
+        </div>
+      )}
+
       <main className="editor-container" ref={containerRef}>
         {explorerVisible && explorerRootDir && (
           <>
@@ -783,19 +1017,12 @@ function App() {
           <>
             <div className="source-pane" style={{ width: `${splitRatio * 100}%` }}>
               <div className="source-wrapper">
-                {sourceHighlightText && (
+                {(sourceHighlightText || hasSearchQuery) && (
                   <div
                     className="source-highlight-backdrop"
                     aria-hidden="true"
                     dangerouslySetInnerHTML={{
-                      __html: content
-                        .replace(/&/g, "&amp;")
-                        .replace(/</g, "&lt;")
-                        .replace(/>/g, "&gt;")
-                        .replace(
-                          new RegExp(sourceHighlightText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"),
-                          '<mark class="sync-highlight">$&</mark>'
-                        ) + "\n",
+                      __html: renderSourceBackdrop(content, sourceHighlightText, searchQuery),
                     }}
                   />
                 )}

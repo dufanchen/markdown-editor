@@ -76,7 +76,7 @@
 
 > 首次打开若提示来自未识别的开发者，在「系统设置 → 隐私与安全性」中点击「仍要打开」即可。
 
-各版本的更新内容见 [CHANGELOG](CHANGELOG.md)。
+各版本的更新内容见 [CHANGELOG](CHANGELOG.md)。产品定义和功能规格见 [docs](docs/README.md)。
 
 ## 🛠 本地开发
 
@@ -100,15 +100,22 @@ npm run tauri build  # 打包构建
 
 ## 📁 项目结构
 
-```
-app/
+```text
+app/                      # 工程实现：Tauri + React + TypeScript
 ├── src/                  # React 前端
 │   ├── App.tsx           # 主界面与交互逻辑
 │   ├── renderer.ts       # Markdown 渲染与层级缩进
 │   ├── useFileManager.ts # 多标签文件管理
 │   └── useTheme.ts       # 主题切换
 └── src-tauri/            # Tauri 原生层（Rust）
-docs/                     # 产品文档（PRD、ADR）
+
+docs/                     # 产品文档、spec、ADR、素材
+├── product/              # PRD、术语、背景材料
+├── specs/                # 新功能开发前的规格说明
+├── adr/                  # 架构决策记录
+└── assets/               # 文档素材
+
+releases/                 # 本地安装包归档（不纳入 git）
 ```
 
 ## 📄 License

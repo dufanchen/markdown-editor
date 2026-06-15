@@ -38,6 +38,8 @@ markdownRenderer.renderer.rules.fence = (tokens, idx, options, env, self) => {
 };
 
 function wrapSections(html: string): string {
+  if (typeof DOMParser === "undefined") return html;
+
   const parser = new DOMParser();
   const doc = parser.parseFromString(`<div>${html}</div>`, "text/html");
   const root = doc.body.firstElementChild as HTMLElement;

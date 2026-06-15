@@ -5,6 +5,18 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.0] - 2026-06-15
+
+### 新增
+- 当前文档内搜索：右上角搜索框、命中计数、上下跳转、`Cmd+F` 快捷键和高亮展示
+- 已打开文档跟随磁盘内容变化：干净文档自动刷新，未保存编辑时提示重新载入或保留当前编辑
+- 关闭最后一个标签页时关闭应用窗口，不再生成新的 Untitled 空白文档
+
+### 变更
+- 整理项目目录：工程实现集中在 `app/`，产品文档、spec、ADR 和素材集中在 `docs/`
+- 更新工程 README 和文档索引，新增功能开发先写 spec 的工作流
+- ESLint 忽略 Tauri 构建产物，并调整不适合当前手动滚动同步实现的 React Hooks 检查规则
+
 ## [0.3.0] - 2026-06-11
 
 ### 新增
@@ -43,6 +55,7 @@
 - 外部链接以系统默认浏览器打开
 - Monochrome (Ivory Ledger) 极简排版与编辑/预览双向高亮
 
+[0.4.0]: https://github.com/dufanchen/markdown-editor/releases/tag/v0.4.0
 [0.3.0]: https://github.com/dufanchen/markdown-editor/releases/tag/v0.3.0
 [0.2.0]: https://github.com/dufanchen/markdown-editor/releases/tag/v0.2.0
 [0.1.0]: https://github.com/dufanchen/markdown-editor/releases/tag/v0.1.0

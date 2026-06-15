@@ -3,7 +3,6 @@ import { message, open, save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export interface TabState {
   id: string;
@@ -235,7 +234,7 @@ export function useFileManager() {
 
   const closeCurrentWindow = useCallback(async () => {
     if (isTauriRuntime()) {
-      await getCurrentWindow().close();
+      await invoke("close_current_window");
       return;
     }
     window.close();
@@ -278,14 +277,16 @@ export function useFileManager() {
         if (!tab.filePath || tab.externalChangeState !== "none") return;
         invoke<string>("read_file_content", { path: tab.filePath })
           .then((diskContent) => {
-            setTabs((prev) =>
-              prev.map((current) => {
+            setTabs((prev) => {
+              let changed = false;
+              const nextTabs: TabState[] = prev.map((current) => {
                 if (current.id !== tab.id || !current.filePath) return current;
                 if (diskContent === current.savedContent) return current;
 
                 const isDirty = current.content !== current.savedContent;
                 if (isDirty) {
                   if (current.content === diskContent) {
+                    changed = true;
                     return {
                       ...current,
                       savedContent: diskContent,
@@ -293,6 +294,13 @@ export function useFileManager() {
                       externalContent: null,
                     };
                   }
+                  if (
+                    current.externalChangeState === "changed" &&
+                    current.externalContent === diskContent
+                  ) {
+                    return current;
+                  }
+                  changed = true;
                   return {
                     ...current,
                     externalChangeState: "changed",
@@ -300,6 +308,7 @@ export function useFileManager() {
                   };
                 }
 
+                changed = true;
                 return {
                   ...current,
                   content: diskContent,
@@ -307,17 +316,23 @@ export function useFileManager() {
                   externalChangeState: "none",
                   externalContent: null,
                 };
-              })
-            );
+              });
+              return changed ? nextTabs : prev;
+            });
           })
           .catch(() => {
-            setTabs((prev) =>
-              prev.map((current) =>
-                current.id === tab.id
-                  ? { ...current, externalChangeState: "deleted", externalContent: null }
-                  : current
-              )
-            );
+            setTabs((prev) => {
+              let changed = false;
+              const nextTabs: TabState[] = prev.map((current) => {
+                if (current.id !== tab.id) return current;
+                if (current.externalChangeState === "deleted" && current.externalContent === null) {
+                  return current;
+                }
+                changed = true;
+                return { ...current, externalChangeState: "deleted", externalContent: null };
+              });
+              return changed ? nextTabs : prev;
+            });
           });
       });
     }, 1500);

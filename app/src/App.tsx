@@ -19,6 +19,8 @@ interface TocNode {
   children: TocNode[];
 }
 
+const SHOW_TEXT_NODE = 4;
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -44,22 +46,22 @@ function findTextMatches(content: string, query: string): { start: number; end: 
   return matches;
 }
 
-function clearPreviewSearchHighlights(root: HTMLElement) {
-  root.querySelectorAll("mark.search-highlight").forEach((mark) => {
-    const parent = mark.parentNode;
-    if (!parent) return;
-    parent.replaceChild(document.createTextNode(mark.textContent || ""), mark);
-    parent.normalize();
-  });
+function getParentDirectory(path: string): string | null {
+  const normalized = path.replace(/\/+$/, "");
+  const separatorIndex = normalized.lastIndexOf("/");
+  if (separatorIndex <= 0) return normalized === "/" ? null : "/";
+  return normalized.slice(0, separatorIndex);
 }
 
-function markPreviewSearchHighlights(root: HTMLElement, query: string, activeIndex: number) {
-  clearPreviewSearchHighlights(root);
+function highlightPreviewSearchHtml(html: string, query: string, activeIndex: number) {
   const trimmedQuery = query.trim();
-  if (!trimmedQuery) return;
+  if (!trimmedQuery || typeof document === "undefined") return html;
+
+  const template = document.createElement("template");
+  template.innerHTML = html;
 
   const lowerQuery = trimmedQuery.toLocaleLowerCase();
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const walker = document.createTreeWalker(template.content, SHOW_TEXT_NODE);
   const textNodes: Text[] = [];
   while (walker.nextNode()) {
     const node = walker.currentNode as Text;
@@ -99,6 +101,8 @@ function markPreviewSearchHighlights(root: HTMLElement, query: string, activeInd
     }
     node.parentNode?.replaceChild(fragment, node);
   }
+
+  return template.innerHTML;
 }
 
 function renderSourceBackdrop(content: string, sourceHighlightText: string, searchQuery: string) {
@@ -253,6 +257,11 @@ function App() {
   const [explorerWidth, setExplorerWidth] = useState(200);
   const isExplorerDragging = useRef(false);
   const openedFromExplorer = useRef(false);
+  const explorerRootDirRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    explorerRootDirRef.current = explorerRootDir;
+  }, [explorerRootDir]);
 
   // Load a directory's children
   const loadDirChildren = useCallback(async (dirPath: string) => {
@@ -275,13 +284,13 @@ function App() {
       openedFromExplorer.current = false;
       return;
     }
-    const parentDir = filePath.substring(0, filePath.lastIndexOf("/"));
-    if (!parentDir || parentDir === explorerRootDir) return;
+    const parentDir = getParentDirectory(filePath);
+    if (!parentDir || parentDir === explorerRootDirRef.current) return;
     setExplorerRootDir(parentDir);
     setExpandedDirs(new Set());
     setDirChildren(new Map());
     loadDirChildren(parentDir);
-  }, [filePath, explorerRootDir, loadDirChildren]);
+  }, [filePath, loadDirChildren]);
 
   const handleToggleDir = useCallback((dirPath: string) => {
     setExpandedDirs((prev) => {
@@ -309,14 +318,13 @@ function App() {
 
   const navigateToParentDir = useCallback(() => {
     if (!explorerRootDir) return;
-    const parentDir = explorerRootDir.substring(0, explorerRootDir.lastIndexOf("/"));
-    if (parentDir) {
-      // Auto-expand the old root so its contents remain visible
-      setExpandedDirs((prev) => new Set(prev).add(explorerRootDir));
-      setExplorerRootDir(parentDir);
-      if (!dirChildren.has(parentDir)) {
-        loadDirChildren(parentDir);
-      }
+    const parentDir = getParentDirectory(explorerRootDir);
+    if (!parentDir || parentDir === explorerRootDir) return;
+    // Auto-expand the old root so its contents remain visible
+    setExpandedDirs((prev) => new Set(prev).add(explorerRootDir));
+    setExplorerRootDir(parentDir);
+    if (!dirChildren.has(parentDir)) {
+      loadDirChildren(parentDir);
     }
   }, [explorerRootDir, loadDirChildren, dirChildren]);
 
@@ -379,7 +387,10 @@ function App() {
   const scrollSyncSource = useRef<"source" | "preview" | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
+  const [searchNavigationVersion, setSearchNavigationVersion] = useState(0);
   const previousSearchQuery = useRef("");
+  const lastPreviewSearchNavigationVersion = useRef(0);
+  const lastSourceSearchNavigationVersion = useRef(0);
 
   const searchMatches = useMemo(
     () => findTextMatches(content, searchQuery),
@@ -391,9 +402,13 @@ function App() {
 
   useEffect(() => {
     const normalizedQuery = searchQuery.trim();
+    const isNewQuery = previousSearchQuery.current !== normalizedQuery;
+    if (normalizedQuery && searchMatchCount > 0 && isNewQuery) {
+      setSearchNavigationVersion((version) => version + 1);
+    }
     setActiveSearchIndex((currentIndex) => {
       if (!normalizedQuery || searchMatchCount === 0) return 0;
-      if (previousSearchQuery.current !== normalizedQuery) return 0;
+      if (isNewQuery) return 0;
       return Math.min(currentIndex, searchMatchCount - 1);
     });
     previousSearchQuery.current = normalizedQuery;
@@ -401,6 +416,7 @@ function App() {
 
   const goToSearchMatch = useCallback((direction: 1 | -1) => {
     if (searchMatchCount === 0) return;
+    setSearchNavigationVersion((version) => version + 1);
     setActiveSearchIndex((currentIndex) =>
       (currentIndex + direction + searchMatchCount) % searchMatchCount
     );
@@ -539,12 +555,10 @@ function App() {
 
   const scrollSyncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isRestoringScroll = useRef(false);
+  const isSearchNavigatingScroll = useRef(false);
+  const searchScrollSyncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleSourceScroll = useCallback(() => {
-    // Skip sync if we're programmatically restoring scroll position
-    if (isRestoringScroll.current) return;
-
-    // Sync backdrop scroll with textarea
+  const syncSourceBackdrop = useCallback(() => {
     const source = sourceRef.current;
     if (source) {
       const backdrop = source.previousElementSibling as HTMLElement | null;
@@ -553,9 +567,32 @@ function App() {
         backdrop.scrollLeft = source.scrollLeft;
       }
     }
+  }, []);
+
+  const suppressSearchScrollSync = useCallback(() => {
+    isSearchNavigatingScroll.current = true;
+    if (searchScrollSyncTimer.current) clearTimeout(searchScrollSyncTimer.current);
+    searchScrollSyncTimer.current = setTimeout(() => {
+      isSearchNavigatingScroll.current = false;
+    }, 120);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (searchScrollSyncTimer.current) clearTimeout(searchScrollSyncTimer.current);
+    };
+  }, []);
+
+  const handleSourceScroll = useCallback(() => {
+    syncSourceBackdrop();
+
+    // Skip pane-to-pane sync during programmatic scrolls.
+    if (isRestoringScroll.current || isSearchNavigatingScroll.current) return;
+
     // Sync preview scroll
     if (scrollSyncSource.current === "preview") return;
     scrollSyncSource.current = "source";
+    const source = sourceRef.current;
     const preview = previewPaneRef.current;
     if (!source || !preview) return;
     const sourceMaxScroll = source.scrollHeight - source.clientHeight;
@@ -567,11 +604,11 @@ function App() {
     scrollSyncTimer.current = setTimeout(() => {
       scrollSyncSource.current = null;
     }, 50);
-  }, []);
+  }, [syncSourceBackdrop]);
 
   const handlePreviewScroll = useCallback(() => {
-    // Skip sync if we're programmatically restoring scroll position
-    if (isRestoringScroll.current) return;
+    // Skip pane-to-pane sync during programmatic scrolls.
+    if (isRestoringScroll.current || isSearchNavigatingScroll.current) return;
 
     if (scrollSyncSource.current === "source") return;
     scrollSyncSource.current = "preview";
@@ -589,10 +626,11 @@ function App() {
     }, 50);
   }, []);
 
+  const activeTabScrollPosition = activeTab.scrollPosition;
+
   // Restore scroll position when switching tabs
   useEffect(() => {
-    const tab = tabs.find((t) => t.id === activeTabId);
-    const savedPosition = tab?.scrollPosition ?? 0;
+    const savedPosition = activeTabScrollPosition;
 
     isRestoringScroll.current = true;
 
@@ -642,7 +680,7 @@ function App() {
     return () => {
       cancelAnimationFrame(rafId);
     };
-  }, [activeTabId, tabs]);
+  }, [activeTabId, activeTabScrollPosition]);
 
   // Highlight selected text in the other pane
   const highlightInPreview = useCallback((selectedText: string) => {
@@ -659,7 +697,7 @@ function App() {
     if (!selectedText || selectedText.length < 2) return;
     const escapedText = selectedText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const regex = new RegExp(`(${escapedText})`, "gi");
-    const walker = document.createTreeWalker(preview, NodeFilter.SHOW_TEXT);
+    const walker = document.createTreeWalker(preview, SHOW_TEXT_NODE);
     const textNodes: Text[] = [];
     while (walker.nextNode()) {
       textNodes.push(walker.currentNode as Text);
@@ -720,21 +758,50 @@ function App() {
     return () => { if (renderTimer.current) clearTimeout(renderTimer.current); };
   }, [content, sourceVisible]);
 
+  const previewHtml = useMemo(
+    () => highlightPreviewSearchHtml(renderedHtml, searchQuery, activeSearchIndex),
+    [renderedHtml, searchQuery, activeSearchIndex]
+  );
+  const previewInnerHtml = useMemo(() => ({ __html: previewHtml }), [previewHtml]);
+
   useEffect(() => {
     const preview = previewRef.current;
     if (!preview) return;
-    markPreviewSearchHighlights(preview, searchQuery, activeSearchIndex);
+    if (
+      searchNavigationVersion === 0 ||
+      lastPreviewSearchNavigationVersion.current === searchNavigationVersion
+    ) {
+      return;
+    }
+    lastPreviewSearchNavigationVersion.current = searchNavigationVersion;
     if (!hasSearchQuery || !hasSearchMatches) return;
 
     const activeMark = preview.querySelector(
       `mark.search-highlight[data-search-index="${activeSearchIndex}"]`
     );
     if (activeMark) {
-      activeMark.scrollIntoView({ block: "center", behavior: "smooth" });
+      suppressSearchScrollSync();
+      activeMark.scrollIntoView({ block: "center", behavior: "auto" });
     }
-  }, [renderedHtml, searchQuery, activeSearchIndex, hasSearchQuery, hasSearchMatches]);
+  }, [
+    renderedHtml,
+    searchQuery,
+    activeSearchIndex,
+    hasSearchQuery,
+    hasSearchMatches,
+    searchNavigationVersion,
+    previewHtml,
+    suppressSearchScrollSync,
+  ]);
 
   useEffect(() => {
+    if (
+      searchNavigationVersion === 0 ||
+      lastSourceSearchNavigationVersion.current === searchNavigationVersion
+    ) {
+      return;
+    }
+    lastSourceSearchNavigationVersion.current = searchNavigationVersion;
     const source = sourceRef.current;
     const activeMatch = searchMatches[activeSearchIndex];
     if (!sourceVisible || !source || !activeMatch) return;
@@ -742,9 +809,18 @@ function App() {
 
     const lineHeight = Number.parseFloat(window.getComputedStyle(source).lineHeight) || 22;
     const lineCountBeforeMatch = content.slice(0, activeMatch.start).split("\n").length - 1;
+    suppressSearchScrollSync();
     source.scrollTop = Math.max(0, lineCountBeforeMatch * lineHeight - source.clientHeight / 2);
-    handleSourceScroll();
-  }, [activeSearchIndex, searchMatches, sourceVisible, content, handleSourceScroll]);
+    syncSourceBackdrop();
+  }, [
+    activeSearchIndex,
+    searchMatches,
+    sourceVisible,
+    content,
+    searchNavigationVersion,
+    suppressSearchScrollSync,
+    syncSourceBackdrop,
+  ]);
 
   // Extract TOC headings from markdown content, excluding code blocks
   const tocItems = useMemo(() => {
@@ -1053,7 +1129,7 @@ function App() {
           <div
             ref={previewRef}
             className="preview-content markdown-body"
-            dangerouslySetInnerHTML={{ __html: renderedHtml }}
+            dangerouslySetInnerHTML={previewInnerHtml}
           />
         </div>
         {tocItems.length > 0 && (

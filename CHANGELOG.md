@@ -5,6 +5,14 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.1] - 2026-06-16
+
+### 修复
+- 修复预览区滚动会被文件轮询拉回顶部的问题
+- 修复文档内搜索跳转不稳定、预览区高亮缺失和滚动乱跳的问题
+- 修复左侧文件目录点击上级目录后会立刻跳回当前文件夹的问题
+- 修复最后一个标签页无法通过 `Cmd+W` 或标签页叉按钮关闭整个应用的问题
+
 ## [0.4.0] - 2026-06-15
 
 ### 新增
@@ -55,6 +63,7 @@
 - 外部链接以系统默认浏览器打开
 - Monochrome (Ivory Ledger) 极简排版与编辑/预览双向高亮
 
+[0.4.1]: https://github.com/dufanchen/markdown-editor/releases/tag/v0.4.1
 [0.4.0]: https://github.com/dufanchen/markdown-editor/releases/tag/v0.4.0
 [0.3.0]: https://github.com/dufanchen/markdown-editor/releases/tag/v0.3.0
 [0.2.0]: https://github.com/dufanchen/markdown-editor/releases/tag/v0.2.0

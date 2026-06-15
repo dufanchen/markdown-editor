@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use tauri::{Manager, RunEvent, Emitter};
+use tauri::{Emitter, Manager, RunEvent, Window};
 
 struct OpenedFile(Arc<Mutex<Option<String>>>);
 
@@ -60,6 +60,11 @@ fn read_bundled_resource(app_handle: tauri::AppHandle, filename: String) -> Resu
     .map_err(|e| format!("Failed to read bundled resource {}: {}", filename, e))
 }
 
+#[tauri::command]
+fn close_current_window(window: Window) -> Result<(), String> {
+  window.destroy().map_err(|e| format!("Failed to close window: {}", e))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   let opened_file: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -70,7 +75,13 @@ pub fn run() {
     .plugin(tauri_plugin_fs::init())
     .plugin(tauri_plugin_shell::init())
     .manage(OpenedFile(opened_file.clone()))
-    .invoke_handler(tauri::generate_handler![get_opened_file, read_file_content, read_bundled_resource, list_directory_files])
+    .invoke_handler(tauri::generate_handler![
+      get_opened_file,
+      read_file_content,
+      read_bundled_resource,
+      list_directory_files,
+      close_current_window
+    ])
     .setup(|_app| {
       Ok(())
     })

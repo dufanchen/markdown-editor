@@ -5,3 +5,4 @@ target/
 *.dmg
 .aone_copilot/
 .idea/
+graphify-out/

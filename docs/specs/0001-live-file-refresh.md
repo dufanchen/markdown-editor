@@ -2,7 +2,15 @@
 
 ## Status
 
-Draft
+Implemented via frontend polling
+
+Current implementation:
+
+- `app/src/useFileManager.ts` polls each opened file every 1.5 seconds with `read_file_content`.
+- Clean documents update `content` and `savedContent` quietly.
+- Dirty documents preserve local edits and store the external disk version in `externalContent`.
+- Deleted or unreadable files keep in-memory content and mark the tab as `deleted`.
+- The preferred Rust `notify` watcher remains a future optimization, not the current implementation.
 
 ## Problem
 
@@ -63,7 +71,7 @@ If the watched file is deleted, moved, or no longer readable:
 
 ## Implementation Notes
 
-Preferred approach:
+Preferred future approach:
 
 - Add a Tauri-side file watcher using the Rust `notify` crate.
 - Expose commands:
@@ -82,6 +90,12 @@ Fallback approach:
 
 - Poll `metadata.modified` every 1-2 seconds for each opened file.
 - Use this only if watcher behavior is unreliable in packaged macOS builds.
+
+Current approach:
+
+- Poll `read_file_content` every 1.5 seconds for each opened file.
+- This avoids watcher packaging complexity and still satisfies the product behavior for small numbers of open Markdown files.
+- If performance becomes an issue with many open tabs or very large files, replace this with the preferred Rust watcher backend.
 
 ## UX Details
 

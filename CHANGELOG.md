@@ -5,6 +5,14 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.2] - 2026-06-16
+
+### 修复
+- 补齐外部文件刷新和关闭标签页逻辑的纯函数测试，覆盖干净文档刷新、脏文档冲突、文件不可读和 active tab 选择
+- 将产品 PRD 更新到当前实现范围，补上多文档 tab、文件目录、文档搜索、外部刷新和最后 tab 关闭窗口
+- 将 live file refresh、in-document search、close app on last tab specs 从 Draft 更新为当前实现状态
+- 明确 live file refresh 当前采用 frontend polling，Rust `notify` watcher 作为未来优化保留
+
 ## [0.4.1] - 2026-06-16
 
 ### 修复
@@ -63,6 +71,7 @@
 - 外部链接以系统默认浏览器打开
 - Monochrome (Ivory Ledger) 极简排版与编辑/预览双向高亮
 
+[0.4.2]: https://github.com/dufanchen/markdown-editor/releases/tag/v0.4.2
 [0.4.1]: https://github.com/dufanchen/markdown-editor/releases/tag/v0.4.1
 [0.4.0]: https://github.com/dufanchen/markdown-editor/releases/tag/v0.4.0
 [0.3.0]: https://github.com/dufanchen/markdown-editor/releases/tag/v0.3.0

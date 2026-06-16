@@ -37,6 +37,76 @@ function isTauriRuntime(): boolean {
 
 type DirtyCloseAction = "save" | "discard" | "cancel";
 
+export function applyExternalDiskContent(tabs: TabState[], tabId: string, diskContent: string): TabState[] {
+  let changed = false;
+  const nextTabs = tabs.map((current) => {
+    if (current.id !== tabId || !current.filePath) return current;
+    if (diskContent === current.savedContent) return current;
+
+    const isDirty = current.content !== current.savedContent;
+    if (isDirty) {
+      if (current.content === diskContent) {
+        changed = true;
+        return {
+          ...current,
+          savedContent: diskContent,
+          externalChangeState: "none" as const,
+          externalContent: null,
+        };
+      }
+      if (
+        current.externalChangeState === "changed" &&
+        current.externalContent === diskContent
+      ) {
+        return current;
+      }
+      changed = true;
+      return {
+        ...current,
+        externalChangeState: "changed" as const,
+        externalContent: diskContent,
+      };
+    }
+
+    changed = true;
+    return {
+      ...current,
+      content: diskContent,
+      savedContent: diskContent,
+      externalChangeState: "none" as const,
+      externalContent: null,
+    };
+  });
+  return changed ? nextTabs : tabs;
+}
+
+export function applyExternalDiskReadError(tabs: TabState[], tabId: string): TabState[] {
+  let changed = false;
+  const nextTabs = tabs.map((current) => {
+    if (current.id !== tabId) return current;
+    if (current.externalChangeState === "deleted" && current.externalContent === null) {
+      return current;
+    }
+    changed = true;
+    return { ...current, externalChangeState: "deleted" as const, externalContent: null };
+  });
+  return changed ? nextTabs : tabs;
+}
+
+export function getNextActiveTabIdAfterClose(
+  tabs: TabState[],
+  activeTabId: string,
+  closingTabId: string
+): string | null {
+  const filtered = tabs.filter((item) => item.id !== closingTabId);
+  if (filtered.length === 0) return null;
+  if (activeTabId !== closingTabId) return activeTabId;
+
+  const closedIndex = tabs.findIndex((item) => item.id === closingTabId);
+  const nextIndex = Math.min(closedIndex, filtered.length - 1);
+  return filtered[nextIndex].id;
+}
+
 export function useFileManager() {
   const [tabs, setTabs] = useState<TabState[]>([createEmptyTab()]);
   const [activeTabId, setActiveTabId] = useState<string>(tabs[0].id);
@@ -277,62 +347,10 @@ export function useFileManager() {
         if (!tab.filePath || tab.externalChangeState !== "none") return;
         invoke<string>("read_file_content", { path: tab.filePath })
           .then((diskContent) => {
-            setTabs((prev) => {
-              let changed = false;
-              const nextTabs: TabState[] = prev.map((current) => {
-                if (current.id !== tab.id || !current.filePath) return current;
-                if (diskContent === current.savedContent) return current;
-
-                const isDirty = current.content !== current.savedContent;
-                if (isDirty) {
-                  if (current.content === diskContent) {
-                    changed = true;
-                    return {
-                      ...current,
-                      savedContent: diskContent,
-                      externalChangeState: "none",
-                      externalContent: null,
-                    };
-                  }
-                  if (
-                    current.externalChangeState === "changed" &&
-                    current.externalContent === diskContent
-                  ) {
-                    return current;
-                  }
-                  changed = true;
-                  return {
-                    ...current,
-                    externalChangeState: "changed",
-                    externalContent: diskContent,
-                  };
-                }
-
-                changed = true;
-                return {
-                  ...current,
-                  content: diskContent,
-                  savedContent: diskContent,
-                  externalChangeState: "none",
-                  externalContent: null,
-                };
-              });
-              return changed ? nextTabs : prev;
-            });
+            setTabs((prev) => applyExternalDiskContent(prev, tab.id, diskContent));
           })
           .catch(() => {
-            setTabs((prev) => {
-              let changed = false;
-              const nextTabs: TabState[] = prev.map((current) => {
-                if (current.id !== tab.id) return current;
-                if (current.externalChangeState === "deleted" && current.externalContent === null) {
-                  return current;
-                }
-                changed = true;
-                return { ...current, externalChangeState: "deleted", externalContent: null };
-              });
-              return changed ? nextTabs : prev;
-            });
+            setTabs((prev) => applyExternalDiskReadError(prev, tab.id));
           });
       });
     }, 1500);
@@ -361,10 +379,9 @@ export function useFileManager() {
 
       setTabs((prev) => {
         const filtered = prev.filter((item) => item.id !== tabId);
-        if (activeTabId === tabId) {
-          const closedIndex = prev.findIndex((item) => item.id === tabId);
-          const nextIndex = Math.min(closedIndex, filtered.length - 1);
-          setActiveTabId(filtered[nextIndex].id);
+        const nextActiveTabId = getNextActiveTabIdAfterClose(prev, activeTabId, tabId);
+        if (nextActiveTabId && nextActiveTabId !== activeTabId) {
+          setActiveTabId(nextActiveTabId);
         }
         return filtered;
       });

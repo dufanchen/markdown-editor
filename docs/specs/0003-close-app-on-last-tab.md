@@ -2,7 +2,14 @@
 
 ## Status
 
-Draft
+Implemented
+
+Current implementation:
+
+- `closeTab(tabId)` is async and prompts before closing any dirty tab.
+- If the last tab is clean, it calls the Tauri `close_current_window` command instead of creating a replacement empty tab.
+- `Cmd+W` and the tab close button both call the same `closeTab` path.
+- The active-tab selection behavior is covered by pure helper tests in `useFileManager.test.ts`.
 
 ## Problem
 
@@ -73,7 +80,7 @@ This spec recommends the same protection for dirty tabs even when more than one 
 Current location:
 
 - `app/src/useFileManager.ts`
-- `closeTab(tabId: string)` currently calls `createEmptyTab()` when `prev.length === 1`.
+- `closeTab(tabId: string)` now closes the current window when `tabs.length === 1`.
 
 Recommended implementation:
 

@@ -2,7 +2,15 @@
 
 ## Status
 
-Draft
+Implemented
+
+Current implementation:
+
+- `App.tsx` owns `searchQuery`, `activeSearchIndex`, and search navigation state.
+- `findTextMatches(content, query)` performs case-insensitive non-overlapping source matching.
+- Preview search wraps rendered text nodes with `mark.search-highlight` and `mark.search-highlight-active`.
+- Source search uses the textarea selection APIs when Source Pane is visible.
+- `Cmd+F`, `Escape`, `Enter`, and `Shift+Enter` are wired in the UI.
 
 ## Problem
 
